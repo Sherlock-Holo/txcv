@@ -5,8 +5,7 @@ pub mod text_translate {
     #[derive(Debug, Copy, Clone)]
     pub struct TextTranslate;
 
-    #[derive(Default, Debug, Clone, PartialEq, Serialize)]
-    #[serde(rename_all = "camelCase")]
+    #[derive(Debug, Clone, Serialize)]
     pub struct TextTranslateRequest {
         #[serde(rename = "SourceText")]
         pub source_text: String,
@@ -18,8 +17,7 @@ pub mod text_translate {
         pub project_id: i64,
     }
 
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct TextTranslateResponse {
         #[serde(rename = "Source")]
         pub source: String,
@@ -46,8 +44,7 @@ pub mod language_detect {
     #[derive(Debug, Copy, Clone)]
     pub struct LanguageDetect;
 
-    #[derive(Default, Debug, Clone, PartialEq, Serialize)]
-    #[serde(rename_all = "camelCase")]
+    #[derive(Debug, Clone, Serialize)]
     pub struct LanguageDetectRequest {
         #[serde(rename = "Text")]
         pub text: String,
@@ -55,8 +52,7 @@ pub mod language_detect {
         pub project_id: i64,
     }
 
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[derive(Debug, Clone, Deserialize)]
     pub struct LanguageDetectResponse {
         #[serde(rename = "Lang")]
         pub lang: String,

@@ -1,8 +1,10 @@
 use clap::Parser;
 
-use crate::translate::{Mode, Translate};
+use self::lang::Language;
+use self::translate::{Mode, Translate};
 
 mod api;
+mod lang;
 mod translate;
 
 #[derive(Debug, Parser)]
@@ -12,6 +14,14 @@ struct Args {
     /// clear authentication
     #[arg(short, long)]
     clear: bool,
+
+    /// source language, default is auto detect
+    #[arg(short, long)]
+    source: Option<Language>,
+
+    /// target language, default is auto detect
+    #[arg(short, long)]
+    target: Option<Language>,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -25,8 +35,12 @@ pub async fn run() -> anyhow::Result<()> {
     let mut translate = Translate::new().await?;
 
     if args.words.is_empty() {
-        translate.run(Mode::Interact).await
+        translate
+            .run(Mode::Interact, args.source, args.target)
+            .await
     } else {
-        translate.run(Mode::Batch(args.words)).await
+        translate
+            .run(Mode::Batch(args.words), args.source, args.target)
+            .await
     }
 }

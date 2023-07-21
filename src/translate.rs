@@ -1,11 +1,13 @@
 use colored::Colorize;
+use governor::{Quota, RateLimiter};
 use keyring::{Entry, Error};
-use requestty::Question;
+use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
 use tokio::task;
 
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
 use crate::api::text_translate::{TextTranslate, TextTranslateRequest};
+use crate::lang::Language;
 
 const SERVICE: &str = "txcv";
 
@@ -42,57 +44,96 @@ impl Translate {
         Ok(())
     }
 
-    pub async fn run(&mut self, mode: Mode) -> anyhow::Result<()> {
+    pub async fn run(
+        &mut self,
+        mode: Mode,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<()> {
         match mode {
-            Mode::Batch(words) => {
-                for word in words {
-                    let translated_word = self.translate_word(word.clone()).await?;
+            Mode::Batch(words) => self.run_batch(words, source, target).await,
+            Mode::Interact => self.run_interact(source, target).await,
+        }
+    }
 
-                    println!(
-                        "{} {} {}",
-                        word.blue(),
-                        "->".white(),
-                        translated_word.green()
-                    );
-                }
-            }
+    async fn run_batch(
+        &self,
+        words: Vec<String>,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<()> {
+        let quota = Quota::per_second(1.try_into().unwrap()).allow_burst(4.try_into().unwrap());
+        let rate_limiter = RateLimiter::direct(quota);
 
-            Mode::Interact => loop {
-                let word = task::spawn_blocking(|| {
-                    let question = Question::input("word").build();
-                    let answer = requestty::prompt_one(question)?;
-                    let word = answer.as_string().unwrap_or("");
-                    if word.is_empty() {
-                        Ok::<_, anyhow::Error>(None)
-                    } else {
-                        Ok(Some(word.to_string()))
-                    }
-                })
-                .await
-                .unwrap()?;
+        for word in words {
+            rate_limiter.until_ready().await;
 
-                match word {
-                    None => return Ok(()),
-                    Some(word) => {
-                        let translated_word = self.translate_word(word.clone()).await?;
-
-                        println!(
-                            "{} {} {}",
-                            word.blue(),
-                            "->".white(),
-                            translated_word.green()
-                        );
-                    }
-                }
-            },
+            self.translate_and_print(word, source, target).await?;
         }
 
         Ok(())
     }
 
-    async fn translate_word(&mut self, word: String) -> anyhow::Result<String> {
-        let source_lang = self.get_source_lang(&word).await?;
-        let target_lang = get_target_lang(&source_lang).unwrap_or("en");
+    async fn run_interact(
+        &self,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let word = task::spawn_blocking(|| {
+                let question = Question::input("word").on_esc(OnEsc::Terminate).build();
+                let answer = requestty::prompt_one(question)?;
+                let word = answer.as_string().unwrap_or("");
+                if word.is_empty() {
+                    Ok::<_, anyhow::Error>(None)
+                } else {
+                    Ok(Some(word.to_string()))
+                }
+            })
+            .await
+            .unwrap()?;
+
+            match word {
+                None => return Ok(()),
+                Some(word) => {
+                    self.translate_and_print(word, source, target).await?;
+                }
+            }
+        }
+    }
+
+    async fn translate_and_print(
+        &self,
+        word: String,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<()> {
+        let translated_word = self.translate_word(word.clone(), source, target).await?;
+
+        println!(
+            "{} {} {}",
+            word.blue(),
+            "->".white(),
+            translated_word.green()
+        );
+
+        Ok(())
+    }
+
+    async fn translate_word(
+        &self,
+        word: String,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<String> {
+        let source_lang = match source {
+            None => self.get_source_lang(&word).await?,
+            Some(source) => source.as_str().to_string(),
+        };
+        let target_lang = match target {
+            None => get_target_lang(&source_lang).unwrap_or("en"),
+            Some(target) => target.as_str(),
+        };
 
         Ok(self
             .api_client
@@ -107,7 +148,7 @@ impl Translate {
             .target_text)
     }
 
-    async fn get_source_lang(&mut self, word: &str) -> anyhow::Result<String> {
+    async fn get_source_lang(&self, word: &str) -> anyhow::Result<String> {
         match self
             .api_client
             .send::<LanguageDetect>(&LanguageDetectRequest {
