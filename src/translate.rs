@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use colored::Colorize;
 use governor::{Quota, RateLimiter};
 use keyring::{Entry, Error};
@@ -62,7 +64,9 @@ impl Translate {
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
-        let quota = Quota::per_second(1.try_into().unwrap()).allow_burst(4.try_into().unwrap());
+        let quota = Quota::with_period(Duration::from_millis(1500))
+            .unwrap()
+            .allow_burst(5.try_into().unwrap());
         let rate_limiter = RateLimiter::direct(quota);
 
         for word in words {
