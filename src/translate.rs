@@ -5,7 +5,8 @@ use governor::{Quota, RateLimiter};
 use keyring::{Entry, Error};
 use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
-use tokio::task;
+use tokio::io::AsyncReadExt;
+use tokio::{io, task};
 
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
 use crate::api::text_translate::{TextTranslate, TextTranslateRequest};
@@ -17,6 +18,7 @@ const SERVICE: &str = "txcv";
 pub enum Mode {
     Batch(Vec<String>),
     Interact,
+    FromStdin,
 }
 
 #[derive(Debug, Clone)]
@@ -25,10 +27,10 @@ pub struct Translate {
 }
 
 impl Translate {
-    pub async fn new() -> anyhow::Result<Translate> {
-        let secret_id = Self::get_secret_id().await?;
-        let secret_key = Self::get_secret_key().await?;
-        let region = Self::get_region().await?;
+    pub async fn new(from_stdin: bool) -> anyhow::Result<Translate> {
+        let secret_id = Self::get_secret_id(from_stdin).await?;
+        let secret_key = Self::get_secret_key(from_stdin).await?;
+        let region = Self::get_region(from_stdin).await?;
 
         let client = Client::new(region, Auth::new(secret_key, secret_id));
 
@@ -55,6 +57,7 @@ impl Translate {
         match mode {
             Mode::Batch(words) => self.run_batch(words, source, target).await,
             Mode::Interact => self.run_interact(source, target).await,
+            Mode::FromStdin => self.run_from_stdin(source, target).await,
         }
     }
 
@@ -76,6 +79,17 @@ impl Translate {
         }
 
         Ok(())
+    }
+
+    async fn run_from_stdin(
+        &self,
+        source: Option<Language>,
+        target: Option<Language>,
+    ) -> anyhow::Result<()> {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf).await?;
+
+        self.translate_and_print(buf, source, target).await
     }
 
     async fn run_interact(
@@ -172,10 +186,14 @@ impl Translate {
         }
     }
 
-    async fn get_secret_id() -> anyhow::Result<String> {
+    async fn get_secret_id(from_stdin: bool) -> anyhow::Result<String> {
         let secret_id_entry = Entry::new(SERVICE, "secret_id")?;
         let secret_id = match secret_id_entry.get_password() {
             Err(Error::NoEntry) => {
+                if from_stdin {
+                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                }
+
                 let secret_id = Self::ask_secret_id().await?;
                 secret_id_entry.set_password(&secret_id)?;
 
@@ -197,10 +215,14 @@ impl Translate {
         Ok(secret_id)
     }
 
-    async fn get_secret_key() -> anyhow::Result<String> {
+    async fn get_secret_key(from_stdin: bool) -> anyhow::Result<String> {
         let secret_key_entry = Entry::new(SERVICE, "secret_key")?;
         let secret_key = match secret_key_entry.get_password() {
             Err(Error::NoEntry) => {
+                if from_stdin {
+                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                }
+
                 let secret_key = Self::ask_secret_key().await?;
                 secret_key_entry.set_password(&secret_key)?;
 
@@ -222,10 +244,14 @@ impl Translate {
         Ok(secret_key)
     }
 
-    async fn get_region() -> anyhow::Result<String> {
+    async fn get_region(from_stdin: bool) -> anyhow::Result<String> {
         let region_entry = Entry::new(SERVICE, "region")?;
         let region = match region_entry.get_password() {
             Err(Error::NoEntry) => {
+                if from_stdin {
+                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                }
+
                 let region = Self::ask_region().await?;
                 region_entry.set_password(&region)?;
 

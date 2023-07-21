@@ -1,3 +1,6 @@
+use std::io;
+use std::io::IsTerminal;
+
 use clap::Parser;
 
 use self::lang::Language;
@@ -32,7 +35,13 @@ pub async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut translate = Translate::new().await?;
+    let from_stdin = !io::stdin().is_terminal();
+    let mut translate = Translate::new(from_stdin).await?;
+    if from_stdin {
+        return translate
+            .run(Mode::FromStdin, args.source, args.target)
+            .await;
+    }
 
     if args.words.is_empty() {
         translate
