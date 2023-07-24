@@ -1,17 +1,17 @@
 [package]
 name = "txcv"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "macros", "io-std"] }
+async-std = { version = "1", features = ["attributes"] }
 governor = "0.6"
 keyring = "2"
 colored = "2"
 serde = { version = "1", features = ["derive"] }
-tencentcloud = "0.1"
+tencentcloud = { version = "0.2", default-features = false, features = ["async-std-rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 requestty = "0.5"

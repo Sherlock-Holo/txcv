@@ -1,18 +1,19 @@
 use std::time::Duration;
 
+use async_std::io::ReadExt;
+use async_std::{io, task};
 use colored::Colorize;
 use governor::{Quota, RateLimiter};
 use keyring::{Entry, Error};
 use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
-use tokio::io::AsyncReadExt;
-use tokio::{io, task};
 
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
 use crate::api::text_translate::{TextTranslate, TextTranslateRequest};
 use crate::lang::Language;
 
 const SERVICE: &str = "txcv";
+const MAX_RESPONSE_SIZE: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Mode {
@@ -32,7 +33,7 @@ impl Translate {
         let secret_key = Self::get_secret_key(from_stdin).await?;
         let region = Self::get_region(from_stdin).await?;
 
-        let client = Client::new(region, Auth::new(secret_key, secret_id));
+        let client = Client::new(region, Auth::new(secret_key, secret_id), MAX_RESPONSE_SIZE);
 
         Ok(Self { api_client: client })
     }
@@ -108,8 +109,7 @@ impl Translate {
                     Ok(Some(word.to_string()))
                 }
             })
-            .await
-            .unwrap()?;
+            .await?;
 
             match word {
                 None => return Ok(()),
@@ -288,7 +288,6 @@ impl Translate {
             Ok(secret_id.to_string())
         })
         .await
-        .unwrap()
     }
 
     async fn ask_secret_key() -> anyhow::Result<String> {
@@ -308,7 +307,6 @@ impl Translate {
             Ok(secret_key.to_string())
         })
         .await
-        .unwrap()
     }
 
     async fn ask_region() -> anyhow::Result<String> {
@@ -326,7 +324,6 @@ impl Translate {
             Ok(region.to_string())
         })
         .await
-        .unwrap()
     }
 }
 
