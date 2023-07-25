@@ -1,9 +1,12 @@
+use std::future::ready;
 use std::time::Duration;
 
 use async_std::io::ReadExt;
 use async_std::{io, task};
 use colored::Colorize;
-use governor::{Quota, RateLimiter};
+use crossterm::terminal;
+use futures_util::stream::FuturesOrdered;
+use futures_util::TryStreamExt;
 use keyring::{Entry, Error};
 use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
@@ -11,6 +14,7 @@ use tencentcloud::{Auth, Client};
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
 use crate::api::text_translate::{TextTranslate, TextTranslateRequest};
 use crate::lang::Language;
+use crate::rate_limit::LeakyBucket;
 
 const SERVICE: &str = "txcv";
 const MAX_RESPONSE_SIZE: usize = 4 * 1024 * 1024;
@@ -25,17 +29,21 @@ pub enum Mode {
 #[derive(Debug, Clone)]
 pub struct Translate {
     api_client: Client,
+    no_color: bool,
 }
 
 impl Translate {
-    pub async fn new(from_stdin: bool) -> anyhow::Result<Translate> {
+    pub async fn new(from_stdin: bool, no_color: bool) -> anyhow::Result<Translate> {
         let secret_id = Self::get_secret_id(from_stdin).await?;
         let secret_key = Self::get_secret_key(from_stdin).await?;
         let region = Self::get_region(from_stdin).await?;
 
         let client = Client::new(region, Auth::new(secret_key, secret_id), MAX_RESPONSE_SIZE);
 
-        Ok(Self { api_client: client })
+        Ok(Self {
+            api_client: client,
+            no_color,
+        })
     }
 
     pub fn clear_authentication() -> anyhow::Result<()> {
@@ -68,16 +76,32 @@ impl Translate {
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
-        let quota = Quota::with_period(Duration::from_millis(1500))
-            .unwrap()
-            .allow_burst(5.try_into().unwrap());
-        let rate_limiter = RateLimiter::direct(quota);
+        const MAX_CONCURRENT: u32 = 4;
 
-        for word in words {
-            rate_limiter.until_ready().await;
+        let bucket = LeakyBucket::builder()
+            .max(MAX_CONCURRENT)
+            .refill_interval(Duration::from_secs(1) / 5)
+            .tokens(MAX_CONCURRENT)
+            .build();
 
-            self.translate_and_print(word, source, target).await?;
-        }
+        FuturesOrdered::from_iter(
+            words
+                .into_iter()
+                .map(|word| ready(Ok::<_, anyhow::Error>(word))),
+        )
+        .and_then(|word| async {
+            bucket.acquire_one().await;
+
+            let translated_word = self.translate_word(word.clone(), source, target).await?;
+
+            Ok((word, translated_word))
+        })
+        .try_for_each(|(word, translated_word)| {
+            self.print(&word, &translated_word);
+
+            ready(Ok(()))
+        })
+        .await?;
 
         Ok(())
     }
@@ -127,15 +151,53 @@ impl Translate {
         target: Option<Language>,
     ) -> anyhow::Result<()> {
         let translated_word = self.translate_word(word.clone(), source, target).await?;
-
-        println!(
-            "{} {} {}",
-            word.blue(),
-            "->".white(),
-            translated_word.green()
-        );
+        self.print(&word, &translated_word);
 
         Ok(())
+    }
+
+    fn print(&self, word: &str, translated_word: &str) {
+        if translated_word.contains('\n') {
+            self.print_newline(word, translated_word);
+
+            return;
+        } else if let Ok((_, rows)) = terminal::size() {
+            let word_count = word.chars().count();
+            let translated_word_count = translated_word.chars().count();
+            if word_count + translated_word_count > rows as _ {
+                self.print_newline(word, translated_word);
+
+                return;
+            }
+        }
+
+        self.print_one_line(word, translated_word);
+    }
+
+    fn print_newline(&self, word: &str, translated_word: &str) {
+        if self.no_color {
+            println!("{word}\n↓\n{translated_word}");
+        } else {
+            println!(
+                "{}\n{}\n{}",
+                word.blue(),
+                "↓".white(),
+                translated_word.green()
+            );
+        }
+    }
+
+    fn print_one_line(&self, word: &str, translated_word: &str) {
+        if self.no_color {
+            println!("{word} -> {translated_word}");
+        } else {
+            println!(
+                "{} {} {}",
+                word.blue(),
+                "->".white(),
+                translated_word.green()
+            );
+        }
     }
 
     async fn translate_word(

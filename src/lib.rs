@@ -8,6 +8,7 @@ use self::translate::{Mode, Translate};
 
 mod api;
 mod lang;
+mod rate_limit;
 mod translate;
 
 #[derive(Debug, Parser)]
@@ -25,6 +26,10 @@ struct Args {
     /// target language, default is auto detect
     #[arg(short, long)]
     target: Option<Language>,
+
+    /// disable color
+    #[arg(long)]
+    no_color: bool,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -36,7 +41,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let from_stdin = !io::stdin().is_terminal();
-    let mut translate = Translate::new(from_stdin).await?;
+    let mut translate = Translate::new(from_stdin, args.no_color).await?;
     if from_stdin {
         return translate
             .run(Mode::FromStdin, args.source, args.target)
