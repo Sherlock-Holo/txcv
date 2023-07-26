@@ -76,11 +76,13 @@ impl Translate {
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
+        // translate api rate limit is 5/s
         const MAX_CONCURRENT: u32 = 4;
+        const REFILL_INTERVAL: Duration = Duration::from_millis(200);
 
         let bucket = LeakyBucket::builder()
             .max(MAX_CONCURRENT)
-            .refill_interval(Duration::from_secs(1) / 5)
+            .refill_interval(REFILL_INTERVAL)
             .tokens(MAX_CONCURRENT)
             .build();
 
