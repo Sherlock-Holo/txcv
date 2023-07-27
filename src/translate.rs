@@ -1,4 +1,4 @@
-use std::future::ready;
+use std::future::{ready, Future};
 use std::time::Duration;
 
 use async_std::io::ReadExt;
@@ -77,8 +77,8 @@ impl Translate {
         target: Option<Language>,
     ) -> anyhow::Result<()> {
         // translate api rate limit is 5/s
-        const MAX_CONCURRENT: u32 = 4;
-        const REFILL_INTERVAL: Duration = Duration::from_millis(200);
+        const MAX_CONCURRENT: u32 = 5;
+        const REFILL_INTERVAL: Duration = Duration::from_millis(100);
 
         let bucket = LeakyBucket::builder()
             .max(MAX_CONCURRENT)
@@ -92,9 +92,14 @@ impl Translate {
                 .map(|word| ready(Ok::<_, anyhow::Error>(word))),
         )
         .and_then(|word| async {
-            bucket.acquire_one().await;
+            let translated_word = tencentcloud_api_retry(|| async {
+                bucket.acquire_one().await;
 
-            let translated_word = self.translate_word(word.clone(), source, target).await?;
+                let translated_word = self.translate_word(word.clone(), source, target).await?;
+
+                Ok(translated_word)
+            })
+            .await?;
 
             Ok((word, translated_word))
         })
@@ -207,7 +212,7 @@ impl Translate {
         word: String,
         source: Option<Language>,
         target: Option<Language>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, tencentcloud::Error> {
         let source_lang = match source {
             None => self.get_source_lang(&word).await?,
             Some(source) => source.as_str().to_string(),
@@ -230,7 +235,7 @@ impl Translate {
             .target_text)
     }
 
-    async fn get_source_lang(&self, word: &str) -> anyhow::Result<String> {
+    async fn get_source_lang(&self, word: &str) -> Result<String, tencentcloud::Error> {
         match self
             .api_client
             .send::<LanguageDetect>(&LanguageDetectRequest {
@@ -245,7 +250,7 @@ impl Translate {
                 Ok("zh".to_string())
             }
 
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err),
             Ok((resp, _)) => Ok(resp.lang),
         }
     }
@@ -388,6 +393,24 @@ impl Translate {
             Ok(region.to_string())
         })
         .await
+    }
+}
+
+async fn tencentcloud_api_retry<
+    Fut: Future<Output = Result<T, tencentcloud::Error>>,
+    T,
+    F: FnMut() -> Fut,
+>(
+    mut f: F,
+) -> Result<T, tencentcloud::Error> {
+    const RATE_LIMIT_CODE: &str = "RequestLimitExceeded";
+
+    loop {
+        match f().await {
+            Err(tencentcloud::Error::Api { err, .. }) if err.code == RATE_LIMIT_CODE => continue,
+            Err(err) => return Err(err),
+            Ok(result) => return Ok(result),
+        }
     }
 }
 
