@@ -1,18 +1,19 @@
 use std::future::{ready, Future};
+use std::io::IsTerminal;
 use std::time::Duration;
 
-use async_std::io::ReadExt;
 use async_std::{io, task};
 use colored::Colorize;
 use crossterm::terminal;
 use futures_util::stream::FuturesOrdered;
-use futures_util::TryStreamExt;
+use futures_util::{AsyncReadExt, TryStreamExt};
 use keyring::{Entry, Error};
 use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
 
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
 use crate::api::text_translate::{TextTranslate, TextTranslateRequest};
+use crate::color::Color;
 use crate::lang::Language;
 use crate::rate_limit::LeakyBucket;
 
@@ -29,11 +30,12 @@ pub enum Mode {
 #[derive(Debug, Clone)]
 pub struct Translate {
     api_client: Client,
-    no_color: bool,
+    color: Color,
+    concise: bool,
 }
 
 impl Translate {
-    pub async fn new(from_stdin: bool, no_color: bool) -> anyhow::Result<Translate> {
+    pub async fn new(from_stdin: bool, color: Color, concise: bool) -> anyhow::Result<Translate> {
         let secret_id = Self::get_secret_id(from_stdin).await?;
         let secret_key = Self::get_secret_key(from_stdin).await?;
         let region = Self::get_region(from_stdin).await?;
@@ -42,7 +44,8 @@ impl Translate {
 
         Ok(Self {
             api_client: client,
-            no_color,
+            color,
+            concise,
         })
     }
 
@@ -182,28 +185,52 @@ impl Translate {
     }
 
     fn print_newline(&self, word: &str, translated_word: &str) {
-        if self.no_color {
-            println!("{word}\n↓\n{translated_word}");
-        } else {
+        let color_output = match self.color {
+            Color::Always => true,
+            Color::Auto => std::io::stdout().is_terminal(),
+            Color::Disable => false,
+        };
+
+        if !color_output {
+            if !self.concise {
+                println!("{word}\n↓\n{translated_word}");
+            } else {
+                println!("{translated_word}");
+            }
+        } else if !self.concise {
             println!(
                 "{}\n{}\n{}",
                 word.blue(),
                 "↓".white(),
                 translated_word.green()
             );
+        } else {
+            println!("{}", translated_word.green());
         }
     }
 
     fn print_one_line(&self, word: &str, translated_word: &str) {
-        if self.no_color {
-            println!("{word} -> {translated_word}");
-        } else {
+        let color_output = match self.color {
+            Color::Always => true,
+            Color::Auto => std::io::stdout().is_terminal(),
+            Color::Disable => false,
+        };
+
+        if !color_output {
+            if !self.concise {
+                println!("{word} -> {translated_word}");
+            } else {
+                println!("{translated_word}");
+            }
+        } else if !self.concise {
             println!(
                 "{} {} {}",
                 word.blue(),
                 "->".white(),
                 translated_word.green()
             );
+        } else {
+            println!("{}", translated_word.green());
         }
     }
 
