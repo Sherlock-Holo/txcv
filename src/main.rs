@@ -1,4 +1,3 @@
-#[async_std::main]
-async fn main() -> anyhow::Result<()> {
-    txcv::run().await
+fn main() -> anyhow::Result<()> {
+    async_global_executor::block_on(txcv::run())
 }

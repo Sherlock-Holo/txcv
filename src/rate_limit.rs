@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use async_std::task;
+use async_io::Timer;
 use futures_util::lock::Mutex;
 
 #[derive(Debug)]
@@ -81,7 +81,7 @@ impl LeakyBucketInner {
             };
             let sleep_duration = target_time.duration_since(Instant::now());
 
-            task::sleep(sleep_duration).await;
+            Timer::after(sleep_duration).await;
 
             self.update_tokens();
         }

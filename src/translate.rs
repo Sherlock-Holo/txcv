@@ -1,12 +1,12 @@
 use std::future::{Future, ready};
-use std::io::IsTerminal;
+use std::io;
+use std::io::{IsTerminal, Read};
 use std::time::Duration;
 
-use async_std::{io, task};
 use colored::Colorize;
 use crossterm::terminal;
+use futures_util::TryStreamExt;
 use futures_util::stream::FuturesOrdered;
-use futures_util::{AsyncReadExt, TryStreamExt};
 use keyring::{Entry, Error};
 use requestty::{OnEsc, Question};
 use tencentcloud::{Auth, Client};
@@ -51,7 +51,7 @@ impl Translate {
 
     pub fn clear_authentication() -> anyhow::Result<()> {
         for secret in ["secret_id", "secret_key", "region"] {
-            match Entry::new(SERVICE, secret)?.delete_password() {
+            match Entry::new(SERVICE, secret)?.delete_credential() {
                 Err(Error::NoEntry) | Ok(_) => {}
                 Err(err) => return Err(err.into()),
             }
@@ -121,8 +121,13 @@ impl Translate {
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
-        let mut buf = String::new();
-        io::stdin().read_to_string(&mut buf).await?;
+        let buf = async_global_executor::spawn_blocking(|| {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+
+            Ok::<_, io::Error>(buf)
+        })
+        .await?;
 
         self.translate_and_print(buf, source, target).await
     }
@@ -133,7 +138,7 @@ impl Translate {
         target: Option<Language>,
     ) -> anyhow::Result<()> {
         loop {
-            let word = task::spawn_blocking(|| {
+            let word = async_global_executor::spawn_blocking(|| {
                 let question = Question::input("word").on_esc(OnEsc::Terminate).build();
                 let answer = requestty::prompt_one(question)?;
                 let word = answer.as_string().unwrap_or("");
@@ -376,7 +381,7 @@ impl Translate {
     }
 
     async fn ask_secret_id() -> anyhow::Result<String> {
-        task::spawn_blocking(|| {
+        async_global_executor::spawn_blocking(|| {
             let question = Question::input("secret_id").message("secret id").build();
             let secret_id = requestty::prompt_one(question)?;
             let secret_id = secret_id
@@ -393,7 +398,7 @@ impl Translate {
     }
 
     async fn ask_secret_key() -> anyhow::Result<String> {
-        task::spawn_blocking(|| {
+        async_global_executor::spawn_blocking(|| {
             let question = Question::password("secret_key")
                 .message("secret key")
                 .build();
@@ -412,7 +417,7 @@ impl Translate {
     }
 
     async fn ask_region() -> anyhow::Result<String> {
-        task::spawn_blocking(|| {
+        async_global_executor::spawn_blocking(|| {
             let question = Question::input("region").message("region").build();
             let region = requestty::prompt_one(question)?;
             let region = region
