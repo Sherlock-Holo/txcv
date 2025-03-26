@@ -1,9 +1,9 @@
 use std::io;
 use std::io::IsTerminal;
 
-use clap::builder::styling::AnsiColor;
-use clap::builder::Styles;
 use clap::Parser;
+use clap::builder::Styles;
+use clap::builder::styling::AnsiColor;
 
 use self::color::Color;
 use self::lang::Language;

@@ -1,4 +1,4 @@
-use std::future::{ready, Future};
+use std::future::{Future, ready};
 use std::io::IsTerminal;
 use std::time::Duration;
 
@@ -174,7 +174,7 @@ impl Translate {
         } else if let Ok((_, rows)) = terminal::size() {
             let word_count = word.chars().count();
             let translated_word_count = translated_word.chars().count();
-            if word_count + translated_word_count > rows as _ {
+            if word_count + translated_word_count > rows as usize {
                 self.print_newline(word, translated_word);
 
                 return;
@@ -287,7 +287,9 @@ impl Translate {
         let secret_id = match secret_id_entry.get_password() {
             Err(Error::NoEntry) => {
                 if from_stdin {
-                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                    return Err(anyhow::anyhow!(
+                        "read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"
+                    ));
                 }
 
                 let secret_id = Self::ask_secret_id().await?;
@@ -316,7 +318,9 @@ impl Translate {
         let secret_key = match secret_key_entry.get_password() {
             Err(Error::NoEntry) => {
                 if from_stdin {
-                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                    return Err(anyhow::anyhow!(
+                        "read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"
+                    ));
                 }
 
                 let secret_key = Self::ask_secret_key().await?;
@@ -345,7 +349,9 @@ impl Translate {
         let region = match region_entry.get_password() {
             Err(Error::NoEntry) => {
                 if from_stdin {
-                    return Err(anyhow::anyhow!("read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"));
+                    return Err(anyhow::anyhow!(
+                        "read from stdin must set secret_id, secret_key and region at first, please just run txcv to set"
+                    ));
                 }
 
                 let region = Self::ask_region().await?;
