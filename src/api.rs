@@ -6,13 +6,13 @@ pub mod text_translate {
     pub struct TextTranslate;
 
     #[derive(Debug, Clone, Serialize)]
-    pub struct TextTranslateRequest {
+    pub struct TextTranslateRequest<'a> {
         #[serde(rename = "SourceText")]
-        pub source_text: String,
+        pub source_text: &'a str,
         #[serde(rename = "Source")]
-        pub source: String,
+        pub source: &'a str,
         #[serde(rename = "Target")]
-        pub target: String,
+        pub target: &'a str,
         #[serde(rename = "ProjectId")]
         pub project_id: i64,
     }
@@ -28,8 +28,13 @@ pub mod text_translate {
     }
 
     impl Api for TextTranslate {
-        type Request = TextTranslateRequest;
+        type Request<'a>
+            = TextTranslateRequest<'a>
+        where
+            Self: 'a;
+
         type Response = TextTranslateResponse;
+
         const VERSION: &'static str = "2018-03-21";
         const ACTION: &'static str = "TextTranslate";
         const SERVICE: &'static str = "tmt";
@@ -45,9 +50,9 @@ pub mod language_detect {
     pub struct LanguageDetect;
 
     #[derive(Debug, Clone, Serialize)]
-    pub struct LanguageDetectRequest {
+    pub struct LanguageDetectRequest<'a> {
         #[serde(rename = "Text")]
-        pub text: String,
+        pub text: &'a str,
         #[serde(rename = "ProjectId")]
         pub project_id: i64,
     }
@@ -59,8 +64,12 @@ pub mod language_detect {
     }
 
     impl Api for LanguageDetect {
-        type Request = LanguageDetectRequest;
+        type Request<'a>
+            = LanguageDetectRequest<'a>
+        where
+            Self: 'a;
         type Response = LanguageDetectResponse;
+
         const VERSION: &'static str = "2018-03-21";
         const ACTION: &'static str = "LanguageDetect";
         const SERVICE: &'static str = "tmt";

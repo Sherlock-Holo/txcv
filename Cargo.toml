@@ -1,6 +1,6 @@
 [package]
 name = "txcv"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "tencent cloud translate console version"
 
@@ -8,18 +8,18 @@ description = "tencent cloud translate console version"
 
 [dependencies]
 async-global-executor = "3.1.0"
-async-io = "2.4.0"
+async-io = "2.6.0"
 futures-util = { version = "0.3", features = ["io"] }
-colored = "3.0.0"
+colored = "3.1.1"
 serde = { version = "1", features = ["derive"] }
-tencentcloud = { version = "0.2", default-features = false, features = ["async-std-rustls-tls"] }
+tencentcloud = { version = "0.3.0", default-features = false, features = ["async-net-rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-requestty = "0.5"
-crossterm = "0.28.1"
+crossterm = "0.29.0"
+rustyline = "18.0.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6.2", features = ["async-io", "crypto-rust", "linux-native-async-persistent"] }
+keyring = { version = "3.6.3", features = ["async-io", "crypto-rust", "linux-native-async-persistent"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6.2", features = ["async-io", "crypto-rust", "apple-native"] }
+keyring = { version = "3.6.3", features = ["async-io", "crypto-rust", "apple-native"] }

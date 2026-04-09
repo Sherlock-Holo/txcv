@@ -1,14 +1,24 @@
+use std::borrow::Cow;
 use std::future::{Future, ready};
 use std::io;
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::time::Duration;
 
 use colored::Colorize;
-use crossterm::terminal;
+use crossterm::ExecutableCommand;
+use crossterm::cursor;
+use crossterm::terminal::{self, ClearType};
 use futures_util::TryStreamExt;
 use futures_util::stream::FuturesOrdered;
 use keyring::{Entry, Error};
-use requestty::{OnEsc, Question};
+use rustyline::completion::Completer;
+use rustyline::config::Configurer;
+use rustyline::error::ReadlineError;
+use rustyline::highlight::{CmdKind, Highlighter};
+use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
+use rustyline::validate::Validator;
+use rustyline::{ColorMode, CompletionType, Helper};
 use tencentcloud::{Auth, Client};
 
 use crate::api::language_detect::{LanguageDetect, LanguageDetectRequest};
@@ -19,6 +29,50 @@ use crate::rate_limit::LeakyBucket;
 
 const SERVICE: &str = "txcv";
 const MAX_RESPONSE_SIZE: usize = 4 * 1024 * 1024;
+
+#[derive(Default)]
+struct MaskingHelper {
+    masking: bool,
+    prompt_style: Option<Cow<'static, str>>,
+}
+
+impl Completer for MaskingHelper {
+    type Candidate = String;
+}
+
+impl Hinter for MaskingHelper {
+    type Hint = String;
+}
+
+impl Validator for MaskingHelper {}
+
+impl Helper for MaskingHelper {}
+
+impl Highlighter for MaskingHelper {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        if self.masking {
+            let width = line.chars().count();
+            Cow::Owned("*".repeat(width))
+        } else {
+            Cow::Borrowed(line)
+        }
+    }
+
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> Cow<'b, str> {
+        match &self.prompt_style {
+            Some(prompt_style) => prompt_style.clone(),
+            None => Cow::Borrowed(prompt),
+        }
+    }
+
+    fn highlight_char(&self, _line: &str, _pos: usize, kind: CmdKind) -> bool {
+        !matches!(kind, CmdKind::MoveCursor) && self.masking
+    }
+}
 
 #[derive(Debug)]
 pub enum Mode {
@@ -98,7 +152,7 @@ impl Translate {
             let translated_word = tencentcloud_api_retry(|| async {
                 bucket.acquire_one().await;
 
-                let translated_word = self.translate_word(word.clone(), source, target).await?;
+                let translated_word = self.translate_word(&word, source, target).await?;
 
                 Ok(translated_word)
             })
@@ -129,7 +183,7 @@ impl Translate {
         })
         .await?;
 
-        self.translate_and_print(buf, source, target).await
+        self.translate_and_print(&buf, source, target).await
     }
 
     async fn run_interact(
@@ -137,36 +191,59 @@ impl Translate {
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
-        loop {
-            let word = async_global_executor::spawn_blocking(|| {
-                let question = Question::input("word").on_esc(OnEsc::Terminate).build();
-                let answer = requestty::prompt_one(question)?;
-                let word = answer.as_string().unwrap_or("");
-                if word.is_empty() {
-                    Ok::<_, anyhow::Error>(None)
-                } else {
-                    Ok(Some(word.to_string()))
-                }
-            })
-            .await?;
+        let mut editor = rustyline::Editor::<MaskingHelper, DefaultHistory>::new()?;
+        let prompt = interact_prompt(self.color_enabled());
+        editor.set_helper(Some(MaskingHelper {
+            masking: false,
+            prompt_style: Some(prompt.1.clone()),
+        }));
+        if self.color_enabled() {
+            editor.set_color_mode(ColorMode::Forced);
+        }
 
-            match word {
-                None => return Ok(()),
-                Some(word) => {
+        loop {
+            let prompt = prompt.clone();
+            let (ret_editor, res) = async_global_executor::spawn_blocking(move || {
+                let res = editor.readline(&prompt);
+
+                (editor, res)
+            })
+            .await;
+            editor = ret_editor;
+
+            match res {
+                Ok(word) => {
+                    let word = word.trim();
+
+                    self.render_interact_submission(word)?;
+
+                    if word.is_empty() {
+                        continue;
+                    }
+
+                    let _ = editor.add_history_entry(word);
                     self.translate_and_print(word, source, target).await?;
                 }
+
+                Err(ReadlineError::Interrupted) => {
+                    println!();
+                    continue;
+                }
+
+                Err(ReadlineError::Eof) => return Ok(()),
+                Err(err) => return Err(err.into()),
             }
         }
     }
 
     async fn translate_and_print(
         &self,
-        word: String,
+        word: &str,
         source: Option<Language>,
         target: Option<Language>,
     ) -> anyhow::Result<()> {
-        let translated_word = self.translate_word(word.clone(), source, target).await?;
-        self.print(&word, &translated_word);
+        let translated_word = self.translate_word(word, source, target).await?;
+        self.print(word, &translated_word);
 
         Ok(())
     }
@@ -189,12 +266,40 @@ impl Translate {
         self.print_one_line(word, translated_word);
     }
 
-    fn print_newline(&self, word: &str, translated_word: &str) {
-        let color_output = match self.color {
+    fn color_enabled(&self) -> bool {
+        match self.color {
             Color::Always => true,
-            Color::Auto => std::io::stdout().is_terminal(),
+            Color::Auto => io::stdout().is_terminal(),
             Color::Disable => false,
-        };
+        }
+    }
+
+    fn render_interact_submission(&self, word: &str) -> anyhow::Result<()> {
+        if !io::stdout().is_terminal() {
+            return Ok(());
+        }
+
+        let mut stdout = io::stdout();
+        stdout.execute(cursor::MoveUp(1))?;
+        stdout.execute(terminal::Clear(ClearType::CurrentLine))?;
+
+        if word.is_empty() {
+            stdout.flush()?;
+            return Ok(());
+        }
+
+        writeln!(
+            stdout,
+            "{}",
+            interact_submission(word, self.color_enabled())
+        )?;
+        stdout.flush()?;
+
+        Ok(())
+    }
+
+    fn print_newline(&self, word: &str, translated_word: &str) {
+        let color_output = self.color_enabled();
 
         if !color_output {
             if !self.concise {
@@ -215,11 +320,7 @@ impl Translate {
     }
 
     fn print_one_line(&self, word: &str, translated_word: &str) {
-        let color_output = match self.color {
-            Color::Always => true,
-            Color::Auto => std::io::stdout().is_terminal(),
-            Color::Disable => false,
-        };
+        let color_output = self.color_enabled();
 
         if !color_output {
             if !self.concise {
@@ -241,13 +342,13 @@ impl Translate {
 
     async fn translate_word(
         &self,
-        word: String,
+        word: &str,
         source: Option<Language>,
         target: Option<Language>,
     ) -> Result<String, tencentcloud::Error> {
         let source_lang = match source {
-            None => self.get_source_lang(&word).await?,
-            Some(source) => source.as_str().to_string(),
+            None => self.get_source_lang(word).await?,
+            Some(source) => Cow::Borrowed(source.as_str()),
         };
         let target_lang = match target {
             None => get_target_lang(&source_lang).unwrap_or("en"),
@@ -258,8 +359,8 @@ impl Translate {
             .api_client
             .send::<TextTranslate>(&TextTranslateRequest {
                 source_text: word,
-                source: source_lang,
-                target: target_lang.to_string(),
+                source: source_lang.as_ref(),
+                target: target_lang,
                 project_id: 0,
             })
             .await?
@@ -267,11 +368,11 @@ impl Translate {
             .target_text)
     }
 
-    async fn get_source_lang(&self, word: &str) -> Result<String, tencentcloud::Error> {
+    async fn get_source_lang(&self, word: &str) -> Result<Cow<'_, str>, tencentcloud::Error> {
         match self
             .api_client
             .send::<LanguageDetect>(&LanguageDetectRequest {
-                text: word.to_string(),
+                text: word,
                 project_id: 0,
             })
             .await
@@ -279,11 +380,12 @@ impl Translate {
             Err(tencentcloud::Error::Api { err, .. })
                 if err.code == "FailedOperation.LanguageRecognitionErr" =>
             {
-                Ok("zh".to_string())
+                Ok(Cow::Borrowed("zh"))
             }
 
             Err(err) => Err(err),
-            Ok((resp, _)) => Ok(resp.lang),
+
+            Ok((resp, _)) => Ok(Cow::Owned(resp.lang)),
         }
     }
 
@@ -381,57 +483,66 @@ impl Translate {
     }
 
     async fn ask_secret_id() -> anyhow::Result<String> {
-        async_global_executor::spawn_blocking(|| {
-            let question = Question::input("secret_id").message("secret id").build();
-            let secret_id = requestty::prompt_one(question)?;
-            let secret_id = secret_id
-                .as_string()
-                .ok_or_else(|| anyhow::anyhow!("secret id is not string"))?;
-
-            if secret_id.is_empty() {
-                return Err(anyhow::anyhow!("secret id is empty"));
-            }
-
-            Ok(secret_id.to_string())
-        })
-        .await
+        async_global_executor::spawn_blocking(|| read_input("secret id: ", false)).await
     }
 
     async fn ask_secret_key() -> anyhow::Result<String> {
-        async_global_executor::spawn_blocking(|| {
-            let question = Question::password("secret_key")
-                .message("secret key")
-                .build();
-            let secret_key = requestty::prompt_one(question)?;
-            let secret_key = secret_key
-                .as_string()
-                .ok_or_else(|| anyhow::anyhow!("secret_key is not string"))?;
-
-            if secret_key.is_empty() {
-                return Err(anyhow::anyhow!("secret_key is empty"));
-            }
-
-            Ok(secret_key.to_string())
-        })
-        .await
+        async_global_executor::spawn_blocking(|| read_input("secret key: ", true)).await
     }
 
     async fn ask_region() -> anyhow::Result<String> {
-        async_global_executor::spawn_blocking(|| {
-            let question = Question::input("region").message("region").build();
-            let region = requestty::prompt_one(question)?;
-            let region = region
-                .as_string()
-                .ok_or_else(|| anyhow::anyhow!("region is not string"))?;
-
-            if region.is_empty() {
-                return Err(anyhow::anyhow!("region is empty"));
-            }
-
-            Ok(region.to_string())
-        })
-        .await
+        async_global_executor::spawn_blocking(|| read_input("region: ", false)).await
     }
+}
+
+fn read_input(prompt: &str, masked: bool) -> anyhow::Result<String> {
+    let mut editor = rustyline::Editor::<MaskingHelper, DefaultHistory>::new()?;
+    editor.set_completion_type(CompletionType::List);
+    editor.set_auto_add_history(false);
+
+    if masked {
+        editor.set_helper(Some(MaskingHelper {
+            masking: true,
+            prompt_style: None,
+        }));
+        editor.set_color_mode(ColorMode::Forced);
+    }
+
+    match editor.readline(prompt) {
+        Ok(value) => {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                Err(anyhow::anyhow!("input is empty"))
+            } else {
+                Ok(value)
+            }
+        }
+
+        Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
+            Err(anyhow::anyhow!("input cancelled"))
+        }
+
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn interact_prompt(color_output: bool) -> (String, Cow<'static, str>) {
+    let raw = format!("? word: {} ", '›');
+    if !color_output {
+        return (raw.clone(), Cow::Owned(raw));
+    }
+
+    let styled = "? \x1b[1;32mword:\x1b[0m \x1b[34m›\x1b[0m ";
+
+    (raw, Cow::Borrowed(styled))
+}
+
+fn interact_submission(word: &str, color_output: bool) -> String {
+    if !color_output {
+        return format!("✔ word: · {word}");
+    }
+
+    format!("{} {} · {word}", "✔".green(), "word:".green().bold())
 }
 
 async fn tencentcloud_api_retry<
