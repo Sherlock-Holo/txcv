@@ -532,9 +532,9 @@ fn interact_prompt(color_output: bool) -> (String, Cow<'static, str>) {
         return (raw.clone(), Cow::Owned(raw));
     }
 
-    let styled = "\x1b[1;32m?\x1b[0m word: \x1b[34m›\x1b[0m ";
+    let styled = format!("{} word: {} ", "?".green().bold(), "›".blue());
 
-    (raw, Cow::Borrowed(styled))
+    (raw, Cow::Owned(styled))
 }
 
 fn interact_submission(word: &str, color_output: bool) -> String {
