@@ -532,7 +532,7 @@ fn interact_prompt(color_output: bool) -> (String, Cow<'static, str>) {
         return (raw.clone(), Cow::Owned(raw));
     }
 
-    let styled = "? \x1b[1;32mword:\x1b[0m \x1b[34m›\x1b[0m ";
+    let styled = "\x1b[1;32m?\x1b[0m word: \x1b[34m›\x1b[0m ";
 
     (raw, Cow::Borrowed(styled))
 }
